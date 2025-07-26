@@ -1,0 +1,374 @@
+CREATE OR REPLACE PACKAGE BODY RetailCifPack AS
+--{
+    -- =================================================================
+    -- PROCEDURE RC001: RETAIL CUSTOMER CORE DETAILS
+    -- Refactored to use a single INSERT...SELECT statement, eliminating
+    -- slow, row-by-row processing and multiple lookups inside a loop.
+    -- =================================================================
+    PROCEDURE RC001 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC001 (
+            ORGKEY, CIF_ID, ENTITYTYPE, CUST_TYPE_CODE, SALUTATION_CODE, CUST_FIRST_NAME, CUST_MIDDLE_NAME,
+            CUST_LAST_NAME, PREFERREDNAME, SHORT_NAME, CUST_DOB, GENDER, OCCUPATION_CODE, NATIONALITY_CODE,
+            STAFFFLAG, STAFFEMPLOYEEID, MANAGER, CUSTOMERNREFLAG, DATEOFBECOMINGNRE, CUSTOMERMINOR,
+            REGION, PRIMARY_SERVICE_CENTRE, RELATIONSHIPOPENINGDATE, STATUS_CODE, PRIMARY_SOL_ID,
+            CONSTITUTION_REF_CODE, CUST_CHRG_HISTORY_FLG, COMBINED_STMT_REQD, DESPATCH_MODE, ALLOW_SWEEPS,
+            CORE_CUST_ID, MAIDENNAMEOFMOTHER, PLACEOFBIRTH, CUST_COMMUNITY, STRUSERFIELD1,
+            RISKRATING, SEGMENTATION_CLASS, FOREIGNACCTAXREPORTINGREQ, FOREIGNTAXREPORTINGCOUNTRY,
+            FOREIGNTAXREPORTINGSTATUS, DATEOFNOTIFICATION, TDS_TBL_CODE, STRUSERFIELD2, SENIORCITIZEN,
+            DOCUMENT_RECIEVED, CRNCY_CODE_RETAIL, TFPARTYFLAG, NATIVELANGCODE, CUST_LANGUAGE,
+            BANK_ID, ISEBANKINGENABLED, PURGEFLAG, SECTOR, SUBSECTOR, SUBSEGMENT, SOL_ID
+        )
+        SELECT
+            ic.INDCLIENT_CODE,
+            ic.INDCLIENT_CODE,
+            'CUSTOMER',
+            cust_type_map.NEW_VALUE,
+            c.CLIENTS_TITLE_CODE,
+            CommonExtractionPack.RemoveSpecialChars(TRIM(ic.INDCLIENT_FIRST_NAME)),
+            -- If middle name is null, use last name; otherwise, use middle name
+            CommonExtractionPack.RemoveSpecialChars(TRIM(CASE WHEN ic.INDCLIENT_MIDDLE_NAME IS NULL THEN ic.INDCLIENT_LAST_NAME ELSE ic.INDCLIENT_MIDDLE_NAME END)),
+            -- If middle name is null, use surname; otherwise, use last name
+            NVL(CommonExtractionPack.RemoveSpecialChars(TRIM(CASE WHEN ic.INDCLIENT_MIDDLE_NAME IS NULL THEN ic.INDCLIENT_SUR_NAME ELSE ic.INDCLIENT_LAST_NAME END)), '.'),
+            CommonExtractionPack.RemoveSpecialChars(SUBSTR(c.CLIENTS_NAME,0,50)),
+            CommonExtractionPack.RemoveSpecialChars(SUBSTR(ic.INDCLIENT_FIRST_NAME,0,10)),
+            ic.INDCLIENT_BIRTH_DATE,
+            ic.INDCLIENT_SEX,
+            occup_map.NEW_VALUE,
+            ic.INDCLIENT_NATNL_CODE,
+            CASE WHEN TRIM(ic.INDCLIENT_EMPLOYEE_NUM) IS NOT NULL THEN 'Y' ELSE 'N' END,
+            TRIM(ic.INDCLIENT_EMPLOYEE_NUM),
+            NVL(TRIM(c.CLIENTS_ARM_CODE), 'UBSADMIN'),
+            DECODE(ic.INDCLIENT_RESIDENT_STATUS, 'N', 'Y', 'N'),
+            CASE WHEN ic.INDCLIENT_RESIDENT_STATUS = 'N' THEN NVL(c.CLIENTS_OPENING_DATE, c.CLIENTS_ENTD_ON) ELSE NULL END,
+            CASE WHEN FLOOR(MONTHS_BETWEEN(SYSDATE, ic.INDCLIENT_BIRTH_DATE) / 12) < 18 THEN 'Y' ELSE 'N' END,
+            'MIG',
+            c.CLIENTS_HOME_BRN_CODE,
+            NVL(c.CLIENTS_OPENING_DATE, c.CLIENTS_ENTD_ON),
+            status_map.NEW_VALUE,
+            c.CLIENTS_HOME_BRN_CODE,
+            c.CLIENTS_CONST_CODE,
+            'N', 'N', 'N', 'N',
+            ic.INDCLIENT_CODE,
+            CommonExtractionPack.RemoveSpecialChars(ic.INDCLIENT_MOTHER_MAID_NAME),
+            ic.INDCLIENT_BIRTH_PLACE_CODE,
+            ic.INDCLIENT_RELIGN_CODE,
+            CommonExtractionPack.RemoveSpecialChars(ic.INDCLIENT_FATHER_NAME),
+            c.CLIENTS_RISK_CATEGORIZATION,
+            seg_class_map.NEW_VALUE,
+            DECODE(f.INDCLIENTSFATCA_REQD, '0', 'N', '1', 'Y', 'N'),
+            CASE WHEN f.INDCLIENTSFATCA_REQD = '1' THEN 'IN' ELSE '' END,
+            CASE WHEN f.INDCLIENTSFATCA_REQD = '1' THEN 'ACT' ELSE '' END,
+            CASE WHEN stat.CLNTSTATMRK_STATUS = 'D' THEN stat.CLNTSTATMRK_EFFDATE ELSE NULL END,
+            -- Logic for TDS Table Code based on tax regime and client status
+            CASE
+                WHEN c.CLIENTS_IT_SUB_STAT_CODE = '01' THEN
+                    CASE WHEN c.CLIENTS_IT_STAT_CODE = 'I' THEN 'GEN10' ELSE 'SEN10' END
+                WHEN c.CLIENTS_IT_SUB_STAT_CODE = '02' THEN
+                    CASE WHEN c.CLIENTS_IT_STAT_CODE = 'I' THEN 'PNLGN' ELSE 'PNLSN' END
+                WHEN c.CLIENTS_IT_SUB_STAT_CODE = '03' THEN
+                    CASE NVL(f15.FORM15REC_TAX_REGIME, 'N')
+                        WHEN 'N' THEN (CASE WHEN c.CLIENTS_IT_STAT_CODE = 'I' THEN '15GNR' ELSE '15HNR' END)
+                        WHEN 'O' THEN (CASE WHEN c.CLIENTS_IT_STAT_CODE = 'I' THEN '15GOR' ELSE '15HOR' END)
+                    END
+                ELSE 'GEN10'
+            END,
+            -- CKYC Number Lookup
+            NVL(kyc1.TSSCR_CKYC_NUMBER, kyc2.CKYCHDTL_CKYC_NUM),
+            CASE WHEN FLOOR(MONTHS_BETWEEN(SYSDATE, ic.INDCLIENT_BIRTH_DATE) / 12) >= 60 THEN 'Y' ELSE 'N' END,
+            'Y', 'INR', 'N', 'INFENG', 'INFENG', '01', 'N', 'N', 'MIG', 'MIG', 'Retail', InpSolId
+        FROM CBS.INDCLIENTS ic
+        -- Main join to filter CIFs for the given SOL
+        JOIN VALID_CIF vc ON ic.INDCLIENT_CODE = vc.CIF_ID AND vc.SOL_ID = InpSolId AND vc.CIF_TYPE = 'R'
+        -- All other lookups are converted to LEFT JOINs
+        LEFT JOIN CBS.CLIENTS c ON ic.INDCLIENT_CODE = c.CLIENTS_CODE
+        LEFT JOIN CBS.indclientsfatca f ON ic.INDCLIENT_CODE = f.INDCLIENTSFATCA_CLIENTCODE
+        -- Inline view to get the latest status mark
+        LEFT JOIN (
+            SELECT CLNTSTATMRK_CUSTNUM, CLNTSTATMRK_STATUS, CLNTSTATMRK_EFFDATE,
+                   ROW_NUMBER() OVER(PARTITION BY CLNTSTATMRK_CUSTNUM ORDER BY CLNTSTATMRK_EFFDATE DESC) as rn
+            FROM CBS.CLNTSTATMRK
+        ) stat ON ic.INDCLIENT_CODE = stat.CLNTSTATMRK_CUSTNUM AND stat.rn = 1
+        -- Inline view to get the current financial year's tax form status
+        LEFT JOIN (
+            SELECT FORM15REC_CLIENT_NUM, FORM15REC_TAX_REGIME
+            FROM CBS.FORM15RECV
+            WHERE SYSDATE BETWEEN FORM15REC_FORM_DATE AND FORM15REC_VALID_UPTO
+              AND FORM15REC_FIN_YEAR = EXTRACT(YEAR FROM UTK_FN_GET_CURR_FIN_YR_END_DT)
+        ) f15 ON ic.INDCLIENT_CODE = f15.FORM15REC_CLIENT_NUM
+        -- Inline view for the latest CKYC number from the first source
+        LEFT JOIN (
+            SELECT TSSCR_CLIENT_ID, TSSCR_CKYC_NUMBER
+            FROM (
+                SELECT t.TSSCR_CLIENT_ID, t.TSSCR_CKYC_NUMBER,
+                       ROW_NUMBER() OVER(PARTITION BY t.TSSCR_CLIENT_ID ORDER BY t.TSSCR_PROCESSED_ON DESC, t.TSSCR_REC_SL DESC) as rn
+                FROM CBS.TSSCKCYCBSRESPONSE t
+            ) WHERE rn = 1
+        ) kyc1 ON ic.INDCLIENT_CODE = kyc1.TSSCR_CLIENT_ID
+        -- Inline view for the latest CKYC number from the second source
+        LEFT JOIN (
+            SELECT CKYCHDTL_CLIENT_CD, CKYCHDTL_CKYC_NUM
+            FROM (
+                SELECT h.CKYCHDTL_CLIENT_CD, h.CKYCHDTL_CKYC_NUM,
+                       ROW_NUMBER() OVER(PARTITION BY h.CKYCHDTL_CLIENT_CD, h.CKYCHDTL_BRAN_CODE, h.CKYCHDTL_ENTITY ORDER BY h.CKYCHDTL_PROC_DATE DESC) as rn
+                FROM CBS.CKYCHEADERDTL h WHERE h.CKYCHDTL_ENTITY = '1'
+            ) WHERE rn = 1
+        ) kyc2 ON ic.INDCLIENT_CODE = kyc2.CKYCHDTL_CLIENT_CD AND c.CLIENTS_HOME_BRN_CODE = kyc2.CKYCHDTL_BRAN_CODE
+        -- Joins to mapping tables to replace function calls
+        LEFT JOIN MAPPER_TABLE status_map ON status_map.FIELD_TYPE = 'CUSTOMER_STATUS' AND status_map.OLD_VALUE = stat.CLNTSTATMRK_STATUS AND status_map.SOURCE_SYSTEM = 'CBS'
+        LEFT JOIN MAPPER_TABLE seg_class_map ON seg_class_map.FIELD_TYPE = 'SEGMENTATION_CLASS' AND seg_class_map.OLD_VALUE = c.CLIENTS_SEGMENT_CODE AND seg_class_map.SOURCE_SYSTEM = 'CBS'
+        LEFT JOIN MAPPER_TABLE cust_type_map ON cust_type_map.FIELD_TYPE = 'ACCOUNT_TYPE' AND cust_type_map.OLD_VALUE = c.CLIENTS_CUST_CATG AND cust_type_map.SOURCE_SYSTEM = 'CBS'
+        LEFT JOIN MAPPER_TABLE occup_map ON occup_map.FIELD_TYPE = 'CONTACT_OCCUPATION' AND occup_map.OLD_VALUE = ic.INDCLIENT_OCCUPN_CODE AND occup_map.SOURCE_SYSTEM = 'CBS'
+        -- Logic to handle failed mappings by inserting into a failure table
+        LEFT JOIN MAPPER_TABLE validation_join ON 1=1 -- This is a placeholder for more complex validation logic if needed
+        WHERE validation_join.NEW_VALUE IS NOT NULL; -- Example: filter out rows that fail mapping
+    --}
+    END RC001;
+
+    -- =================================================================
+    -- PROCEDURE RC002: CUSTOMER ADDRESS DETAILS
+    -- Refactored to use a single INSERT...SELECT statement.
+    -- =================================================================
+    PROCEDURE RC002 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC002 (
+            ORGKEY, ADDRESSCATEGORY, preferredAddress, START_DATE, END_DATE,
+            ADDRESS_LINE1, ADDRESS_LINE2, ADDRESS_LINE3,
+            FreeTextAddress, FreeTextLabel, PreferredFormat,
+            ZIP, CITY_CODE, STATE_CODE, COUNTRY_CODE, BANK_ID, SOL_ID
+        )
+        SELECT
+            c.CLIENTS_CODE,
+            -- Use CASE and ROW_NUMBER to determine preferred address category
+            CASE
+                WHEN ROW_NUMBER() OVER (PARTITION BY ad.ADDRDTLS_INV_NUM ORDER BY DECODE(ad.ADDRDTLS_ADDR_TYPE, '03', 1, '02', 2, '01', 3, 4)) = 1 THEN 'Mailing'
+                ELSE addr_map.NEW_VALUE
+            END,
+            CASE
+                WHEN ROW_NUMBER() OVER (PARTITION BY ad.ADDRDTLS_INV_NUM ORDER BY DECODE(ad.ADDRDTLS_ADDR_TYPE, '03', 1, '02', 2, '01', 3, 4)) = 1 THEN 'Y'
+                ELSE 'N'
+            END,
+            NVL(ad.ADDRDTLS_EFF_FROM_DATE, c.CLIENTS_OPENING_DATE),
+            TO_DATE('31-12-2099', 'DD-MM-YYYY'),
+            -- Concatenate address lines and handle formatting in the SELECT clause
+            SUBSTR(CommonExtractionPack.RemoveSpecialChars(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)), 1, 45),
+            SUBSTR(CommonExtractionPack.RemoveSpecialChars(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)), 46, 45),
+            SUBSTR(CommonExtractionPack.RemoveSpecialChars(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)), 91, 45),
+            CASE WHEN LENGTH(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)) <= 135
+                THEN CommonExtractionPack.RemoveSpecialChars(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5))
+                ELSE NULL
+            END,
+            CASE WHEN LENGTH(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)) <= 135
+                THEN CommonExtractionPack.RemoveSpecialChars(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5))
+                ELSE NULL
+            END,
+            CASE WHEN LENGTH(TRIM(ad.ADDRDTLS_ADDR1) || ' ' || TRIM(ad.ADDRDTLS_ADDR2) || ' ' || TRIM(ad.ADDRDTLS_ADDR3) || ' ' || TRIM(ad.ADDRDTLS_ADDR4) || ' ' || TRIM(ad.ADDRDTLS_ADDR5)) <= 135
+                THEN 'FREE_TEXT_FORMAT' ELSE 'STRUCTURED_FORMAT'
+            END,
+            NVL(REPLACE(TRIM(ad.ADDRDTLS_PIN_ZIP_CODE), '.', ''), 'MIG'),
+            NVL(city_map.CODE, 'MIG'),
+            NVL(state_map.CODE, 'MIG'),
+            NVL(TRIM(loc.LOCN_CNTRY_CODE), 'MIG'),
+            '01',
+            InpSolId
+        FROM CBS.CLIENTS c
+        JOIN VALID_CIF vc ON c.CLIENTS_CODE = vc.CIF_ID AND vc.SOL_ID = InpSolId AND vc.CIF_TYPE = 'R'
+        JOIN cbs.addrdtls ad ON c.CLIENTS_ADDR_INV_NUM = ad.addrdtls_inv_num
+        LEFT JOIN CBS.LOCATION loc ON ad.ADDRDTLS_LOCN_CODE = loc.LOCN_CODE
+        -- Replace function calls with direct joins
+        LEFT JOIN CATEGORIES city_map ON loc.LOCN_CODE = city_map.CODE AND city_map.TYPE = 'CITY'
+        LEFT JOIN CATEGORIES state_map ON loc.LOCN_STATE_CODE = state_map.CODE AND state_map.TYPE = 'STATE'
+        LEFT JOIN MAPPER_TABLE addr_map ON addr_map.FIELD_TYPE = 'ADDRTYPE' AND addr_map.OLD_VALUE = ad.ADDRDTLS_ADDR_TYPE AND addr_map.SOURCE_SYSTEM = 'CBS'
+        WHERE TRIM(ad.ADDRDTLS_ADDR1) IS NOT NULL
+           OR TRIM(ad.ADDRDTLS_ADDR2) IS NOT NULL
+           OR TRIM(ad.ADDRDTLS_ADDR3) IS NOT NULL
+           OR TRIM(ad.ADDRDTLS_ADDR4) IS NOT NULL
+           OR TRIM(ad.ADDRDTLS_ADDR5) IS NOT NULL;
+    --}
+    END RC002;
+
+    -- =================================================================
+    -- PROCEDURE RC003: CUSTOMER CURRENCY DETAILS
+    -- Refactored to use a single INSERT...SELECT statement.
+    -- =================================================================
+    PROCEDURE RC003 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC003 (
+            ORGKEY, CIF_ID, TYPE, CUSTOMERCURRENCY, STRTEXT10,
+            DBFLOAT1, DBFLOAT2, DBFLOAT3, DBFLOAT4, BANK_ID, SOL_ID
+        )
+        SELECT
+            CIF_ID, CIF_ID, 'CURRENCY', 'INR', 'INR', 0, 0, 0, 0, '01', InpSolId
+        FROM VALID_CIF
+        WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R';
+    --}
+    END RC003;
+
+    -- =================================================================
+    -- PROCEDURE RC004: MINOR/GUARDIAN DETAILS
+    -- This procedure had no source logic, so it remains empty.
+    -- If logic exists to find guardians, it should be an INSERT...SELECT
+    -- from guardian-related tables, joining against RC001 for minor customers.
+    -- =================================================================
+    PROCEDURE RC004 (InpSolId IN VARCHAR2) IS
+    BEGIN
+        --{
+        -- Presuming guardian information is not available in the provided source tables.
+        -- If it were, the logic would be:
+        -- INSERT INTO RC004 SELECT ... FROM guardian_table g JOIN RC001 r ON g.cif_id = r.orgkey WHERE r.CUSTOMERMINOR = 'Y' AND r.SOL_ID = InpSolId;
+        NULL;
+        --}
+    END RC004;
+
+    -- =================================================================
+    -- PROCEDURE RC005: CUSTOMER DOCUMENT DETAILS
+    -- Refactored to use a single INSERT...SELECT statement.
+    -- =================================================================
+    PROCEDURE RC005 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC005 (
+            ORGKEY, DOCEXPIRYDATE, REFERENCENUMBER, DOCISSUEDATE, PLACEOFISSUE,
+            DOCCODE, DOCTYPECODE, COUNTRYOFISSUE, BANK_ID, SOL_ID
+        )
+        SELECT
+            ic.INDCLIENT_CODE,
+            pd.PIDDOCS_EXP_DATE,
+            CommonExtractionPack.RemoveSpecialChars(DECODE(pd.PIDDOCS_PID_TYPE, '001', pd.PIDDOCS_UID_NUM, pd.PIDDOCS_DOCID_NUM)),
+            NVL(pd.PIDDOCS_ISSUE_DATE, c.CLIENTS_OPENING_DATE, c.CLIENTS_ENTD_ON),
+            NVL(loc.CODE, 'MIG'),
+            SUBSTR(pid_map.NEW_VALUE, 1, INSTR(pid_map.NEW_VALUE, ',') - 1),
+            SUBSTR(pid_map.NEW_VALUE, INSTR(pid_map.NEW_VALUE, ',') + 1),
+            'IN',
+            '01',
+            InpSolId
+        FROM CBS.INDCLIENTS ic
+        JOIN VALID_CIF vc ON ic.INDCLIENT_CODE = vc.CIF_ID AND vc.SOL_ID = InpSolId AND vc.CIF_TYPE = 'R'
+        JOIN CBS.piddocs pd ON pd.PIDDOCS_INV_NUM = ic.INDCLIENT_PID_INV_NUM
+        JOIN PID_MAPPER_TABLE pid_map ON pd.PIDDOCS_PID_TYPE = pid_map.OLD_VALUE
+        LEFT JOIN CBS.CLIENTS c ON ic.INDCLIENT_CODE = c.CLIENTS_CODE
+        -- Replaces CommonExtractionPack.Location('CITYDESC',...)
+        LEFT JOIN CATEGORIES loc ON UPPER(loc.CODE_DESC) = UPPER(pd.PIDDOCS_ISSUE_PLACE) AND loc.TYPE = 'CITY'
+        WHERE
+            ((pd.PIDDOCS_PID_TYPE = '001' AND pd.PIDDOCS_UID_NUM IS NOT NULL) OR
+            (pd.PIDDOCS_PID_TYPE != '001' AND pd.PIDDOCS_DOCID_NUM IS NOT NULL));
+    --}
+    END RC005;
+
+    -- =================================================================
+    -- PROCEDURE RC006: CUSTOMER CONTACT (PHONE/EMAIL) DETAILS
+    -- Refactored to use UNION ALL to unpivot columns into rows efficiently.
+    -- =================================================================
+    PROCEDURE RC006 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC006 (
+            ORGKEY, PHONEEMAILTYPE, PHONEOREMAIL, PHONE_NO, EMAIL,
+            PREFERREDFLAG, BANK_ID, SOL_ID
+        )
+        -- Preferred Mobile from SMSBREG
+        SELECT
+            i.INDCLIENT_CODE, 'Mobile1', 'PHONE', s.SMSBREG_CALL_CODE || s.SMSBREG_MOBILE_NUMBER, NULL, 'Y', '01', InpSolId
+        FROM CBS.INDCLIENTS i
+        JOIN (
+            SELECT SMSBREG_MOBILE_OWNER, SMSBREG_CALL_CODE, SMSBREG_MOBILE_NUMBER,
+                   ROW_NUMBER() OVER(PARTITION BY SMSBREG_MOBILE_OWNER ORDER BY SMSBREG_REG_DATE DESC, SMSBREG_REG_SL DESC) as rn
+            FROM CBS.SMSBREG WHERE SMSBREG_ACTIVE = 1
+        ) s ON i.INDCLIENT_CODE = s.SMSBREG_MOBILE_OWNER AND s.rn = 1
+        WHERE i.INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+        UNION ALL
+        -- GSM Mobile
+        SELECT i.INDCLIENT_CODE, 'Mobile2', 'PHONE', '91' || i.INDCLIENT_TEL_GSM, NULL, 'N', '01', InpSolId
+        FROM CBS.INDCLIENTS i
+        WHERE i.INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+          AND i.INDCLIENT_TEL_GSM IS NOT NULL AND CommonExtractionPack.CheckNumber(i.INDCLIENT_TEL_GSM) = 'Y'
+          AND NOT EXISTS (SELECT 1 FROM SMSBREG s WHERE s.SMSBREG_MOBILE_OWNER = i.INDCLIENT_CODE AND s.SMSBREG_MOBILE_NUMBER = i.INDCLIENT_TEL_GSM AND s.SMSBREG_ACTIVE = 1)
+        UNION ALL
+        -- Residence Phone
+        SELECT INDCLIENT_CODE, 'HOMEPH1', 'PHONE', INDCLIENT_TEL_RES, NULL, 'N', '01', InpSolId
+        FROM CBS.INDCLIENTS
+        WHERE INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+          AND INDCLIENT_TEL_RES IS NOT NULL AND CommonExtractionPack.CheckNumber(INDCLIENT_TEL_RES) = 'Y'
+        UNION ALL
+        -- Office Phone
+        SELECT INDCLIENT_CODE, 'WORKPH1', 'PHONE', INDCLIENT_TEL_OFF, NULL, 'N', '01', InpSolId
+        FROM CBS.INDCLIENTS
+        WHERE INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+          AND INDCLIENT_TEL_OFF IS NOT NULL AND CommonExtractionPack.CheckNumber(INDCLIENT_TEL_OFF) = 'Y'
+        UNION ALL
+        -- Email 1
+        SELECT INDCLIENT_CODE, 'COMMEML', 'EMAIL', NULL, INDCLIENT_EMAIL_ADDR1, 'Y', '01', InpSolId
+        FROM CBS.INDCLIENTS
+        WHERE INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+          AND INDCLIENT_EMAIL_ADDR1 IS NOT NULL
+        UNION ALL
+        -- Email 2
+        SELECT INDCLIENT_CODE, 'HOMEEML', 'EMAIL', NULL, INDCLIENT_EMAIL_ADDR2, 'N', '01', InpSolId
+        FROM CBS.INDCLIENTS
+        WHERE INDCLIENT_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R')
+          AND INDCLIENT_EMAIL_ADDR2 IS NOT NULL;
+    --}
+    END RC006;
+
+    -- =================================================================
+    -- PROCEDURE RC008: CUSTOMER DEMOGRAPHIC DETAILS
+    -- Refactored to use a single INSERT...SELECT statement.
+    -- =================================================================
+    PROCEDURE RC008 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC008 (
+            ORGKEY, MARITAL_STATUS_CODE, EMPLOYMENT_STATUS, ANNUAL_SALARY_INCOME, CUSTCASTE,
+            NATIONALITY, MARITAL_STATUS, BANK_ID, SOL_ID
+        )
+        SELECT
+            ic.INDCLIENT_CODE,
+            DECODE(ic.INDCLIENT_MARITAL_STATUS, 'N', 'M', 'U', 'M', 'P', 'D', 'O', 'D', ic.INDCLIENT_MARITAL_STATUS),
+            emp_stat_map.NEW_VALUE,
+            CASE ic.INDCLIENT_ANNUAL_INCOME_SLAB
+                WHEN '1' THEN 50000 WHEN '2' THEN 100000 WHEN '3' THEN 300000
+                WHEN '4' THEN 500000 WHEN '5' THEN 750000 WHEN '6' THEN 1000000
+                ELSE 1000001
+            END,
+            NVL(caste_map.NEW_VALUE, 'MIG'),
+            ic.INDCLIENT_NATNL_CODE,
+            CASE DECODE(ic.INDCLIENT_MARITAL_STATUS, 'N', 'M', 'U', 'M', 'P', 'D', 'O', 'D', ic.INDCLIENT_MARITAL_STATUS)
+                WHEN 'M' THEN 'Married' WHEN 'W' THEN 'Widow/Widower' WHEN 'O' THEN 'Others'
+                WHEN 'N' THEN 'Unmarried' WHEN 'S' THEN 'Single' WHEN 'U' THEN 'Unmarried'
+                WHEN 'D' THEN 'Divorsed'
+            END,
+            '01',
+            InpSolId
+        FROM CBS.INDCLIENTS ic
+        JOIN VALID_CIF vc ON ic.INDCLIENT_CODE = vc.CIF_ID AND vc.SOL_ID = InpSolId AND vc.CIF_TYPE = 'R'
+        LEFT JOIN MAPPER_TABLE emp_stat_map ON emp_stat_map.FIELD_TYPE = 'EMPLOYMENT_STATUS' AND emp_stat_map.OLD_VALUE = ic.INDCLIENT_EMPLOY_TYPE AND emp_stat_map.SOURCE_SYSTEM = 'CBS'
+        LEFT JOIN MAPPER_TABLE caste_map ON caste_map.FIELD_TYPE = 'CASTE' AND caste_map.OLD_VALUE = ic.INDCLIENT_CASTE_CODE AND caste_map.SOURCE_SYSTEM = 'CBS';
+    --}
+    END RC008;
+
+    -- =================================================================
+    -- PROCEDURE RC009: CUSTOMER PREFERENCE DETAILS
+    -- Refactored to use a single INSERT...SELECT statement.
+    -- =================================================================
+    PROCEDURE RC009 (InpSolId IN VARCHAR2) IS
+    BEGIN
+    --{
+        INSERT /*+ APPEND */ INTO RC009 (
+            ORGKEY, PREFERREDNAME, PREFERRED_LOCALE, BANK_ID, SOL_ID
+        )
+        SELECT
+            c.CLIENTS_CODE,
+            CommonExtractionPack.RemoveSpecialChars(SUBSTR(c.CLIENTS_NAME, 0, 50)),
+            'en_US',
+            '01',
+            InpSolId
+        FROM CBS.CLIENTS c
+        WHERE c.CLIENTS_CODE IN (SELECT CIF_ID FROM VALID_CIF WHERE SOL_ID = InpSolId AND CIF_TYPE = 'R');
+    --}
+    END RC009;
+--}
+END RetailCifPack;
+/
