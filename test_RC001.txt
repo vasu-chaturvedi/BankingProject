@@ -47,11 +47,7 @@ BEGIN
         c.CLIENTS_HOME_BRN_CODE,
         NVL(c.CLIENTS_OPENING_DATE, c.CLIENTS_ENTD_ON),
         NVL(TRIM(c.CLIENTS_ARM_CODE), 'UBSADMIN'),
-        NVL(
-            (SELECT NEW_VALUE FROM MAPPER_TABLE m
-             WHERE m.FIELD_TYPE = 'CUSTOMER_STATUS' AND m.OLD_VALUE = s.CLNTSTATMRK_STATUS AND m.SOURCE_SYSTEM = 'CBS'),
-            'A'
-        ),
+        get_mapped_value('CUSTOMER_STATUS', s.CLNTSTATMRK_STATUS, 'CBS', 'A'),
         CASE 
             WHEN f.FORM15REC_FORM_DATE IS NOT NULL THEN 
                 CASE 
