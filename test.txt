@@ -1,0 +1,83 @@
+SELECT INDCLIENT_CODE
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_FIRST_NAME)
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_MIDDLE_NAME)
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_LAST_NAME)
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_SUR_NAME)
+	,SUBSTR(INDCLIENT_FIRST_NAME,0,10) SHORT_NAME
+	,INDCLIENT_BIRTH_DATE
+	,INDCLIENT_SEX
+	,INDCLIENT_NATNL_CODE
+	,INDCLIENT_EMPLOYEE_NUM
+	,INDCLIENT_LANG_CODE
+	,INDCLIENT_OCCUPN_CODE
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_MOTHER_MAID_NAME)
+	,INDCLIENT_BIRTH_PLACE_CODE
+	,INDCLIENT_RELIGN_CODE
+	,CommonExtractionPack.RemoveSpecialChars(INDCLIENT_FATHER_NAME)
+	,INDCLIENT_DISABLED
+	,DECODE(INDCLIENT_RESIDENT_STATUS,'N','Y','N') NreFlag
+	,CLIENTS_TITLE_CODE
+	,SUBSTR(CLIENTS_NAME,0,50) PREFERREDNAME
+	,CLIENTS_HOME_BRN_CODE
+	,NVL(CLIENTS_OPENING_DATE,CLIENTS_ENTD_ON)
+	,NVL(TRIM(CLIENTS_ARM_CODE),'UBSADMIN')
+	,CLIENTS_RISK_CATEGORIZATION
+	,CLIENTS_SEGMENT_CODE
+	,CLIENTS_CUST_CATG
+	,CLIENTS_CONST_CODE
+	,CLIENTS_IT_STAT_CODE
+	,CLIENTS_IT_SUB_STAT_CODE
+	,FLOOR(MONTHS_BETWEEN(SYSDATE,INDCLIENT_BIRTH_DATE)/12) AGE
+	--,DECODE(INDCLIENTSFATCA_REQD,'0','N','1','Y') ForeignAccTaxReportingReq
+	,CLNTSTATMRK_STATUS
+	,CLNTSTATMRK_EFFDATE
+	,FORM15REC_TAX_REGIME TAX_REGIME
+FROM CBS.CLIENTS A
+LEFT JOIN CBS.INDCLIENTS B ON A.CLIENTS_CODE = B.INDCLIENT_CODE
+--LEFT JOIN CBS.indclientsfatca c ON INDCLIENTSFATCA_CLIENTCODE = A.CLIENTS_CODE AND INDCLIENTSFATCA_ENTITY_NUM = 1
+LEFT JOIN CBS.FORM15RECV d ON FORM15REC_CLIENT_NUM = A.CLIENTS_CODE AND FORM15REC_FIN_YEAR = EXTRACT(YEAR FROM UTK_FN_GET_CURR_FIN_YR_END_DT)
+LEFT JOIN CBS.CLNTSTATMRK e ON CLNTSTATMRK_CUSTNUM = A.CLIENTS_CODE AND CLNTSTATMRK_EFFDATE = (SELECT MAX(CLNTSTATMRK_EFFDATE) FROM CBS.CLNTSTATMRK B WHERE e.CLNTSTATMRK_CUSTNUM = B.CLNTSTATMRK_CUSTNUM)
+WHERE A.CLIENTS_ENT_NUM  = 1
+AND A.CLIENTS_HOME_BRN_CODE = '&1'
+AND A.CLIENTS_TYPE_FLG = 'I';
+
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 227539246
+
+----------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name            | Rows  | Bytes | Cost (%CPU)| Time     |
+----------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                 | 12843 |  2144K| 77029   (1)| 00:00:04 |
+|   1 |  NESTED LOOPS OUTER                    |                 | 12843 |  2144K| 77029   (1)| 00:00:04 |
+|*  2 |   HASH JOIN RIGHT OUTER                |                 | 12843 |  1981K| 18848   (1)| 00:00:01 |
+|*  3 |    TABLE ACCESS FULL                   | FORM15RECV      |  9811 |   114K|   589   (2)| 00:00:01 |
+|   4 |    NESTED LOOPS OUTER                  |                 | 12245 |  1745K| 18259   (1)| 00:00:01 |
+|*  5 |     TABLE ACCESS BY INDEX ROWID BATCHED| CLIENTS         | 12245 |   860K|  7236   (1)| 00:00:01 |
+|*  6 |      INDEX RANGE SCAN                  | IDXCLITYPFLG    | 12246 |       |    29   (0)| 00:00:01 |
+|   7 |     TABLE ACCESS BY INDEX ROWID        | INDCLIENTS      |     1 |    74 |     1   (0)| 00:00:01 |
+|*  8 |      INDEX UNIQUE SCAN                 | SYS_C00191581   |     1 |       |     1   (0)| 00:00:01 |
+|   9 |   VIEW PUSHED PREDICATE                | VW_DCL_68325330 |     1 |    13 |     5   (0)| 00:00:01 |
+|  10 |    NESTED LOOPS                        |                 |     1 |    38 |     5   (0)| 00:00:01 |
+|  11 |     VIEW                               | VW_SQ_1         |     1 |    22 |     3   (0)| 00:00:01 |
+|  12 |      SORT GROUP BY                     |                 |     1 |    14 |     3   (0)| 00:00:01 |
+|* 13 |       INDEX SKIP SCAN                  | PK_CLNTSTATMRK  |     1 |    14 |     3   (0)| 00:00:01 |
+|  14 |     TABLE ACCESS BY INDEX ROWID BATCHED| CLNTSTATMRK     |     1 |    16 |     2   (0)| 00:00:01 |
+|* 15 |      INDEX SKIP SCAN                   | PK_CLNTSTATMRK  |     1 |       |     1   (0)| 00:00:01 |
+----------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   2 - access("FORM15REC_CLIENT_NUM"(+)="A"."CLIENTS_CODE")
+   3 - filter("FORM15REC_FIN_YEAR"(+)=EXTRACT(YEAR FROM "UTK_FN_GET_CURR_FIN_YR_END_DT"()))
+   5 - filter("A"."CLIENTS_ENT_NUM"=1)
+   6 - access("A"."CLIENTS_HOME_BRN_CODE"=1387 AND "A"."CLIENTS_TYPE_FLG"='I')
+   8 - access("A"."CLIENTS_CODE"="B"."INDCLIENT_CODE"(+))
+  13 - access("B"."CLNTSTATMRK_CUSTNUM"="A"."CLIENTS_CODE")
+       filter("B"."CLNTSTATMRK_CUSTNUM"="A"."CLIENTS_CODE")
+  15 - access("CLNTSTATMRK_CUSTNUM"="A"."CLIENTS_CODE" AND
+              "CLNTSTATMRK_EFFDATE"="MAX(CLNTSTATMRK_EFFDATE)")
+       filter("CLNTSTATMRK_CUSTNUM"="A"."CLIENTS_CODE" AND
+              "CLNTSTATMRK_EFFDATE"="MAX(CLNTSTATMRK_EFFDATE)" AND "E"."CLNTSTATMRK_CUSTNUM"="ITEM_1")
