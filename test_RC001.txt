@@ -1,0 +1,103 @@
+-- Optimized RetailCifPack using Direct Insert for RC001
+CREATE OR REPLACE PACKAGE RetailCifPack AS
+    PROCEDURE RC001 (InpSolId IN VARCHAR2);
+END RetailCifPack;
+/
+
+CREATE OR REPLACE PACKAGE BODY RetailCifPack AS
+
+    PROCEDURE RC001 (InpSolId IN VARCHAR2) IS
+    BEGIN
+        -- Enable parallel DML for performance
+        EXECUTE IMMEDIATE 'ALTER SESSION ENABLE PARALLEL DML';
+
+        -- Perform direct-path insert
+        INSERT /*+ APPEND PARALLEL(b, 8) */ INTO RC001_STAGE (
+            ORGKEY,
+            CIF_ID,
+            CUST_FIRST_NAME,
+            CUST_MIDDLE_NAME,
+            CUST_LAST_NAME,
+            SHORT_NAME,
+            CUST_DOB,
+            GENDER,
+            NATIONALITY_CODE,
+            OCCUPATION_CODE,
+            CUSTOMERMINOR,
+            SENIORCITIZEN,
+            CUSTOMER_LANGUAGE,
+            PREFERREDNAME,
+            PRIMARY_SERVICE_CENTRE,
+            RELATIONSHIPOPENINGDATE,
+            MANAGER,
+            STATUS_CODE,
+            TDS_TBL_CODE,
+            FOREIGNTAXSTATUS,
+            FOREIGNCOUNTRY,
+            CKYC_NUMBER
+        )
+        SELECT
+            b.INDCLIENT_CODE,
+            b.INDCLIENT_CODE,
+            REGEXP_REPLACE(TRIM(b.INDCLIENT_FIRST_NAME), '[@$%|]', ''),
+            REGEXP_REPLACE(TRIM(b.INDCLIENT_MIDDLE_NAME), '[@$%|]', ''),
+            NVL(REGEXP_REPLACE(TRIM(b.INDCLIENT_LAST_NAME), '[@$%|]', ''), '.'),
+            SUBSTR(REGEXP_REPLACE(TRIM(b.INDCLIENT_FIRST_NAME), '[@$%|]', ''), 1, 10),
+            b.INDCLIENT_BIRTH_DATE,
+            b.INDCLIENT_SEX,
+            b.INDCLIENT_NATNL_CODE,
+            b.INDCLIENT_OCCUPN_CODE,
+            CASE WHEN FLOOR(MONTHS_BETWEEN(SYSDATE, b.INDCLIENT_BIRTH_DATE)/12) < 18 THEN 'Y' ELSE 'N' END,
+            CASE WHEN FLOOR(MONTHS_BETWEEN(SYSDATE, b.INDCLIENT_BIRTH_DATE)/12) >= 60 THEN 'Y' ELSE 'N' END,
+            'INFENG',
+            REGEXP_REPLACE(TRIM(c.CLIENTS_NAME), '[@$%|]', ''),
+            c.CLIENTS_HOME_BRN_CODE,
+            NVL(c.CLIENTS_OPENING_DATE, c.CLIENTS_ENTD_ON),
+            NVL(TRIM(c.CLIENTS_ARM_CODE), 'UBSADMIN'),
+            NVL(
+                (SELECT NEW_VALUE FROM MAPPER_TABLE m
+                 WHERE m.FIELD_TYPE = 'CUSTOMER_STATUS' AND m.OLD_VALUE = s.CLNTSTATMRK_STATUS AND m.SOURCE_SYSTEM = 'CBS'),
+                'A'
+            ),
+            CASE 
+                WHEN f.FORM15REC_FORM_DATE IS NOT NULL THEN 
+                    CASE 
+                        WHEN f.FORM15REC_TAX_REGIME = 'N' THEN '15GNR' 
+                        ELSE '15GOR' 
+                    END
+                ELSE 'GEN10'
+            END,
+            CASE WHEN fat.INDCLIENTSFATCA_REQD = '1' THEN 'ACT' ELSE 'INACT' END,
+            CASE WHEN fat.INDCLIENTSFATCA_REQD = '1' THEN 'IN' ELSE NULL END,
+            NVL(
+                (SELECT MAX(TSSCR_CKYC_NUMBER) FROM CBS.TSSCKCYCBSRESPONSE r
+                 WHERE r.TSSCR_CLIENT_ID = b.INDCLIENT_CODE),
+                (SELECT MAX(CKYCHDTL_CKYC_NUM) FROM CBS.CKYCHEADERDTL h
+                 WHERE h.CKYCHDTL_CLIENT_CD = b.INDCLIENT_CODE
+                   AND h.CKYCHDTL_ENTITY = '1'
+                   AND h.CKYCHDTL_BRAN_CODE = c.CLIENTS_HOME_BRN_CODE)
+            )
+        FROM CBS.INDCLIENTS b
+        JOIN CBS.CLIENTS c ON c.CLIENTS_CODE = b.INDCLIENT_CODE
+        LEFT JOIN CBS.INDCLIENTSFATCA fat ON fat.INDCLIENTSFATCA_CLIENTCODE = b.INDCLIENT_CODE
+        LEFT JOIN CBS.CLNTSTATMRK s ON s.CLNTSTATMRK_CUSTNUM = b.INDCLIENT_CODE
+            AND s.CLNTSTATMRK_EFFDATE = (
+                SELECT MAX(e.CLNTSTATMRK_EFFDATE)
+                FROM CBS.CLNTSTATMRK e
+                WHERE e.CLNTSTATMRK_CUSTNUM = s.CLNTSTATMRK_CUSTNUM
+            )
+        LEFT JOIN CBS.FORM15RECV f ON f.FORM15REC_CLIENT_NUM = b.INDCLIENT_CODE
+            AND SYSDATE BETWEEN f.FORM15REC_FORM_DATE AND f.FORM15REC_VALID_UPTO
+            AND f.FORM15REC_FIN_YEAR = EXTRACT(YEAR FROM SYSDATE)
+        WHERE EXISTS (
+            SELECT 1 FROM VALID_CIF v
+            WHERE v.SOL_ID = InpSolId
+              AND v.CIF_TYPE = 'R'
+              AND v.CIF_ID = b.INDCLIENT_CODE
+        );
+
+        COMMIT;
+    END RC001;
+
+END RetailCifPack;
+/
